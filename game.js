@@ -4,6 +4,18 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 // --- Global Variables ---
 let camera, scene, renderer, controls, weapon;
 let currentWeaponType = 'pistol'; // pistol, ak47, knife
+
+// --- Multiplayer / Networking ---
+let peer;
+let allConns = []; // Host: all connected clients. Client: only the host connection.
+let myId;
+let myTeamId = 0; // 0 = Team 1 (Teammate labeling), 1 = Team 2
+let isHost = false;
+let remotePlayers = {}; // Map of meshes keyed by Peer ID
+let playerTeams = {};   // Map of team IDs keyed by Peer ID
+let networkReady = false;
+let syncTimer = 0;
+const SYNC_RATE = 1000 / 30; // 30 updates per second
 let isFiring = false;
 let lastShotTime = 0;
 let fireRate = 0; // ms between shots
@@ -24,8 +36,9 @@ let moveLeft = false;
 let moveRight = false;
 let canJump = false;
 let isCrouching = false;
-const PLAYER_STAND_HEIGHT = 10;
-const PLAYER_CROUCH_HEIGHT = 5;
+const PLAYER_STAND_HEIGHT = 9.7;
+const PLAYER_CROUCH_HEIGHT = 6.0;
+const PLAYER_EYE_OFFSET = 4.2; // Offset from character center to eyes
 const PLAYER_RADIUS = 2.5;
 
 let prevTime = performance.now();
@@ -40,14 +53,15 @@ let isGameOver = false;
 // Round System
 let playerWins = 0;
 let enemyWins = 0;
+let opponentWins = 0;
 let roundActive = false;
 const MAX_WINS = 10;
 const enemiesPerRound = 5;
 
 // AI Logic
-const enemyFireRate = 1000; // ms
+const enemyFireRate = 600; // ms (Faster fire rate)
 const aiVisionRange = 500;
-const enemySpeed = 15;
+const enemySpeed = 25; // Faster movement
 
 // Weapon Configs (Ammo)
 const weaponConfigs = {
@@ -70,6 +84,8 @@ const hud = document.getElementById('hud');
 const gameOverScreen = document.getElementById('game-over');
 const healthDisplay = document.getElementById('health');
 const scoreDisplay = document.getElementById('score');
+const winScreen = document.getElementById('win-screen');
+const deathScreen = document.getElementById('death-screen');
 const finalScoreDisplay = document.getElementById('final-score');
 const ammoDisplay = document.createElement('div');
 ammoDisplay.id = 'ammo';
@@ -106,6 +122,9 @@ function init() {
 
     // --- Weapon System ---
     switchWeapon('ak47'); // Start with AK-47 as requested
+
+    // --- Networking Init ---
+    initMultiplayer();
 
 
 
@@ -175,6 +194,12 @@ function init() {
                 break;
             case 'ShiftLeft':
             case 'ShiftRight':
+            case 'ControlLeft':
+            case 'ControlRight':
+            case 'ShiftLeft':
+            case 'ShiftRight':
+            case 'ControlLeft':
+            case 'ControlRight':
                 isCrouching = true;
                 break;
         }
@@ -200,6 +225,8 @@ function init() {
                 break;
             case 'ShiftLeft':
             case 'ShiftRight':
+            case 'ControlLeft':
+            case 'ControlRight':
                 isCrouching = false;
                 break;
         }
@@ -294,83 +321,71 @@ function switchWeapon(type) {
 }
 
 function createPistol(group) {
-    const loader = new THREE.TextureLoader();
-    const printstreamTex = loader.load('usp_printstream.png');
-
-    // Materials - Precise Printstream Colors
     const silkWhiteMat = new THREE.MeshStandardMaterial({
         color: 0xffffff,
-        map: printstreamTex,
         roughness: 0.2,
-        metalness: 0.3,
-        side: THREE.DoubleSide
+        metalness: 0.1
     });
 
     const matteBlackMat = new THREE.MeshStandardMaterial({
         color: 0x1a1a1a,
-        roughness: 0.8,
-        side: THREE.DoubleSide
+        roughness: 0.8
     });
 
-    const accentPearlescent = new THREE.MeshPhysicalMaterial({
-        color: 0xffffff,
-        metalness: 0.9,
-        roughness: 0.1,
-        iridescence: 1.0,
-        iridescenceIOR: 1.3,
-        side: THREE.DoubleSide
+    const gunMetalMat = new THREE.MeshStandardMaterial({
+        color: 0x333333,
+        roughness: 0.5,
+        metalness: 0.5
     });
 
-    // 1. Silencer (Cylinder) - Distinctive fat white cylinder
-    const silencerGeo = new THREE.CylinderGeometry(0.18, 0.18, 1.4, 32);
+    // 1. Silencer (Suppressor) - Iconic CS2 USP-S look
+    const silencerGeo = new THREE.CylinderGeometry(0.14, 0.14, 1.8, 32);
     silencerGeo.rotateX(-Math.PI / 2);
-    const silencer = new THREE.Mesh(silencerGeo, silkWhiteMat);
-    silencer.position.set(0, 0.15, -1.5);
+    const silencer = new THREE.Mesh(silencerGeo, matteBlackMat);
+    silencer.position.set(0, 0.2, -1.8);
     group.add(silencer);
 
-    // Silencer Connector (Ring)
-    const connGeo = new THREE.CylinderGeometry(0.19, 0.19, 0.1, 32);
-    connGeo.rotateX(-Math.PI / 2);
-    const connector = new THREE.Mesh(connGeo, accentPearlescent);
-    connector.position.set(0, 0.15, -0.85);
-    group.add(connector);
-
-    // 2. Slide (Top Body) - White, sleek
-    const slideGeo = new THREE.BoxGeometry(0.36, 0.42, 1.4);
-    const slide = new THREE.Mesh(slideGeo, silkWhiteMat);
-    slide.position.set(0, 0.2, -0.1);
+    // 2. Slide (Top Body)
+    const slideGeo = new THREE.BoxGeometry(0.3, 0.35, 1.5);
+    const slide = new THREE.Mesh(slideGeo, silkWhiteMat); // White slide for Printstream style
+    slide.position.set(0, 0.22, -0.1);
     group.add(slide);
 
-    // 3. Lower Body (Frame) - Black
-    const frameGeo = new THREE.BoxGeometry(0.34, 0.3, 1.3);
+    // 3. Lower Body (Frame)
+    const frameGeo = new THREE.BoxGeometry(0.28, 0.25, 1.2);
     const frame = new THREE.Mesh(frameGeo, matteBlackMat);
-    frame.position.set(0, -0.1, -0.1);
+    frame.position.set(0, -0.05, -0.1);
     group.add(frame);
 
-    // 4. Handle (Grip) - Black, textured angled
-    const handleGeo = new THREE.BoxGeometry(0.35, 1.0, 0.6);
+    // 4. Handle (Grip)
+    const handleGeo = new THREE.BoxGeometry(0.32, 1.1, 0.55);
     const handle = new THREE.Mesh(handleGeo, matteBlackMat);
-    handle.position.set(0, -0.6, 0.4);
-    handle.rotation.x = 0.25;
+    handle.position.set(0, -0.65, 0.35);
+    handle.rotation.x = 0.22;
     group.add(handle);
 
-    // 5. Trigger Guard & Details
-    const guardGeo = new THREE.BoxGeometry(0.1, 0.05, 0.4);
-    const guard = new THREE.Mesh(guardGeo, matteBlackMat);
-    guard.position.set(0, -0.35, 0.0);
-    guard.rotation.x = 0.4;
-    group.add(guard);
+    // 5. Suppressor Connector (Threaded part)
+    const connGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.2, 16);
+    connGeo.rotateX(-Math.PI / 2);
+    const connector = new THREE.Mesh(connGeo, gunMetalMat);
+    connector.position.set(0, 0.2, -0.85);
+    group.add(connector);
 
-    const guardVGeo = new THREE.BoxGeometry(0.1, 0.25, 0.05);
-    const guardV = new THREE.Mesh(guardVGeo, matteBlackMat);
-    guardV.position.set(0, -0.25, -0.2);
-    group.add(guardV);
+    // 6. Hammer & Sights
+    const sightGeo = new THREE.BoxGeometry(0.06, 0.08, 0.15);
+    const frontSight = new THREE.Mesh(sightGeo, matteBlackMat);
+    frontSight.position.set(0, 0.4, -0.75);
+    group.add(frontSight);
 
-    // 6. Magazine Base
-    const magGeo = new THREE.BoxGeometry(0.34, 0.1, 0.56);
-    const mag = new THREE.Mesh(magGeo, silkWhiteMat); // White base on Printstream
-    mag.position.set(0, -0.95, 0.5);
-    group.add(mag);
+    const backSight = new THREE.Mesh(sightGeo, matteBlackMat);
+    backSight.position.set(0, 0.4, 0.5);
+    group.add(backSight);
+
+    const hammerGeo = new THREE.BoxGeometry(0.1, 0.2, 0.1);
+    const hammer = new THREE.Mesh(hammerGeo, gunMetalMat);
+    hammer.position.set(0, 0.2, 0.65);
+    hammer.rotation.x = 0.5;
+    group.add(hammer);
 }
 
 function createAK47(group) {
@@ -627,10 +642,14 @@ function shoot() {
         updateAmmoDisplay();
     }
 
-    // Create a bullet (Realistic Tracer)
-    const bulletGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.8, 8);
+    // Create a bullet (Ultra-Visible Tracer)
+    const bulletGeo = new THREE.CylinderGeometry(0.4, 0.4, 6.0, 8);
     bulletGeo.rotateX(-Math.PI / 2);
-    const bulletMat = new THREE.MeshBasicMaterial({ color: 0xd4af37 });
+    const bulletMat = new THREE.MeshStandardMaterial({
+        color: 0xffff00,
+        emissive: 0xffff00,
+        emissiveIntensity: 2.0
+    });
     const bullet = new THREE.Mesh(bulletGeo, bulletMat);
 
     // Start position: player position (0 offset to prevent wall clipping)
@@ -638,19 +657,28 @@ function shoot() {
     const direction = new THREE.Vector3();
     controls.getDirection(direction);
 
-    // Bullet Spread & Delayed Recoil
-    let spreadAmount = isCrouching ? 0.005 : 0.01; // Higher accuracy while crouching
+    // Bullet Spread & Delayed Recoil (Even higher moving inaccuracy)
+    const horizontalSpeed = Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
+    const movingInaccuracy = horizontalSpeed * 0.002;
+    let spreadAmount = (isCrouching ? 0.005 : 0.01) + movingInaccuracy;
     let upwardRecoil = 0;
 
     if (currentWeaponType === 'ak47') {
-        // RECOIL DELAY: Starts after 5 shots
-        if (recoilCounter >= 5) {
-            const activeScale = recoilCounter - 5;
-            upwardRecoil = activeScale * (isCrouching ? 0.01 : 0.02); // Recoil reduced while crouching
-            spreadAmount = (isCrouching ? 0.02 : 0.03) + (activeScale * 0.01);
+        // JUMP INACCURACY
+        let effectiveRecoilCounter = recoilCounter;
+        if (!canJump) {
+            effectiveRecoilCounter = 15;
+        }
+
+        // NO DELAY: Recoil starts from the second bullet (recoilCounter > 0)
+        if (effectiveRecoilCounter > 0) {
+            // Significant "jump" for the second shot to move off head
+            const recoilJump = (effectiveRecoilCounter === 1) ? 0.15 : 0.05;
+            upwardRecoil = effectiveRecoilCounter * (isCrouching ? 0.03 : recoilJump);
+            spreadAmount = (isCrouching ? 0.03 : 0.05) + (effectiveRecoilCounter * 0.02);
         } else {
             upwardRecoil = 0;
-            // Precise first 5 shots
+            // First shot remains precise
         }
         recoilCounter++;
     } else {
@@ -680,6 +708,15 @@ function shoot() {
     if (weapon) {
         weapon.position.z += 0.5;
         weapon.rotation.x += 0.1;
+    }
+
+    // Networking: Notify peer that we shot
+    if (networkReady && conn && conn.open) {
+        conn.send({
+            type: 'shoot',
+            pos: bullet.position,
+            dir: direction
+        });
     }
 }
 
@@ -737,15 +774,43 @@ function meleeAttack() {
     raycasterMelee.set(controls.getObject().position, new THREE.Vector3().copy(controls.getDirection(new THREE.Vector3())));
     raycasterMelee.far = 10.0; // Slightly longer range for ease
 
-    const intersects = raycasterMelee.intersectObjects(enemies);
+    const targets = [...enemies];
+    for (const id in remotePlayers) {
+        if (playerTeams[id] !== myTeamId) {
+            targets.push(remotePlayers[id]);
+        }
+    }
+
+    const intersects = raycasterMelee.intersectObjects(targets);
     if (intersects.length > 0) {
         const e = intersects[0].object;
-        e.userData.health -= 50;
-        if (e.userData.health <= 0) {
-            scene.remove(e);
-            const idx = enemies.indexOf(e);
-            if (idx > -1) enemies.splice(idx, 1);
-            if (enemies.length === 0) endRound(true);
+
+        let hitPeerId = null;
+        for (const id in remotePlayers) {
+            if (remotePlayers[id] === e) {
+                hitPeerId = id;
+                break;
+            }
+        }
+
+        if (hitPeerId) {
+            const data = { type: "hit", targetId: hitPeerId, damage: 50 };
+            if (isHost) {
+                broadcast(data);
+            } else if (allConns[0]) {
+                allConns[0].send(data);
+            }
+        } else {
+            e.userData.health -= 50;
+            if (e.userData.health <= 0) {
+                e.userData.isDead = true;
+                const idx = enemies.indexOf(e);
+                if (idx > -1) {
+                    enemies.splice(idx, 1);
+                    if (enemies.length === 0) endRound(true);
+                    setTimeout(() => scene.remove(e), 3000);
+                }
+            }
         }
     }
 }
@@ -764,6 +829,23 @@ function startRound() {
     healthDisplay.textContent = "Health: " + health;
     recoilCounter = 0;
 
+    // Reset Ammo for all weapons
+    for (const type in ammoConfigs) {
+        ammoConfigs[type].mag = weaponConfigs[type] ? weaponConfigs[type].magSize : 30; // Accessing base config if possible, else fallback
+        // Since ammoConfigs is modified in place, we need to know the initial mag size. 
+        // Checking the config object.
+        if (type === 'ak47') ammoConfigs[type].mag = 30;
+        if (type === 'pistol') ammoConfigs[type].mag = 12;
+        // Reserve could also be reset if desired, though often reserve is kept. User asked to "reset bullets".
+        if (type === 'ak47') ammoConfigs[type].reserve = 90;
+        if (type === 'pistol') ammoConfigs[type].reserve = 36;
+    }
+    updateAmmoDisplay();
+
+    // Hide round overlays
+    if (winScreen) winScreen.style.display = 'none';
+    if (deathScreen) deathScreen.style.display = 'none';
+
     // Clear old stuff
     for (const e of enemies) scene.remove(e);
     enemies.length = 0;
@@ -775,28 +857,32 @@ function startRound() {
     impacts.length = 0;
 
     // Reset Player
-    controls.getObject().position.set(0, 10, 80);
-    controls.getObject().rotation.set(0, Math.PI, 0);
+    if (networkReady) {
+        // Player 1 (Host) and Player 2 positions
+        if (isHost) {
+            controls.getObject().position.set(0, 10, 80);
+            controls.getObject().rotation.set(0, Math.PI, 0);
+        } else {
+            controls.getObject().position.set(0, 10, -80);
+            controls.getObject().rotation.set(0, 0, 0);
+        }
+    } else {
+        controls.getObject().position.set(0, 10, 80);
+        controls.getObject().rotation.set(0, Math.PI, 0);
+        spawnEnemies(enemiesPerRound);
+    }
 
-    spawnEnemies(enemiesPerRound);
-    scoreDisplay.textContent = `Match: ${playerWins} - ${enemyWins}`;
+    scoreDisplay.textContent = networkReady ? `Match: ${playerWins} - ${opponentWins}` : `Match: ${playerWins} - ${enemyWins}`;
 }
 
 function spawnEnemies(count) {
     for (let i = 0; i < count; i++) {
         // Narrower plane (5 vs 8) for tighter hitbox as requested
-        const geometry = new THREE.PlaneGeometry(5, 15);
-        const material = new THREE.MeshBasicMaterial({
-            map: targetTexture,
-            transparent: true,
-            side: THREE.DoubleSide,
-            alphaTest: 0.5
-        });
-        const enemy = new THREE.Mesh(geometry, material);
+        const enemy = create3DCharacterModel(0xff3333); // Red bots for enemies
 
         enemy.position.x = (Math.random() - 0.5) * 150;
         enemy.position.z = (Math.random() - 0.5) * 100 - 20;
-        enemy.position.y = 7.5;
+        enemy.position.y = 5.5; // Feet on ground (stand height - eyes) 
 
         enemy.userData = {
             health: 100,
@@ -885,18 +971,23 @@ function updateEnemies(delta) {
 }
 
 function enemyShoot(enemy) {
-    const bulletGeo = new THREE.SphereGeometry(0.5, 8, 8);
-    const bulletMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const bulletGeo = new THREE.SphereGeometry(2.5, 8, 8);
+    const bulletMat = new THREE.MeshStandardMaterial({
+        color: 0xff3300,
+        emissive: 0xff3300,
+        emissiveIntensity: 2.0
+    });
     const bullet = new THREE.Mesh(bulletGeo, bulletMat);
     bullet.position.copy(enemy.position).y += 2;
 
     const playerPos = controls.getObject().position.clone();
-    playerPos.x += (Math.random() - 0.5) * 6;
-    playerPos.y += (Math.random() - 0.5) * 6;
-    playerPos.z += (Math.random() - 0.5) * 6;
+    // Reduced spread for better accuracy
+    playerPos.x += (Math.random() - 0.5) * 3;
+    playerPos.y += (Math.random() - 0.5) * 3;
+    playerPos.z += (Math.random() - 0.5) * 3;
 
     const dir = new THREE.Vector3().subVectors(playerPos, bullet.position).normalize();
-    bullet.userData.velocity = dir.multiplyScalar(1.2);
+    bullet.userData.velocity = dir.multiplyScalar(15.0); // Matched to player speed
     scene.add(bullet);
     enemyBullets.push(bullet);
 }
@@ -917,6 +1008,7 @@ function updateBullets() {
 
         let closestHit = null;
         let isEnemy = false;
+        let isRemote = false;
 
         if (enemyHits.length > 0) {
             closestHit = enemyHits[0];
@@ -926,6 +1018,26 @@ function updateBullets() {
             if (!closestHit || wallHits[0].distance < closestHit.distance) {
                 closestHit = wallHits[0];
                 isEnemy = false;
+                isRemote = false;
+            }
+        }
+
+        // Multiplayer: Check hit on all remote players
+        if (networkReady) {
+            for (const id in remotePlayers) {
+                const rp = remotePlayers[id];
+                // FRIENDLY FIRE: Skip if same team
+                if (playerTeams[id] === myTeamId) continue;
+
+                const remoteHits = bulletRay.intersectObject(rp);
+                if (remoteHits.length > 0) {
+                    if (!closestHit || remoteHits[0].distance < closestHit.distance) {
+                        closestHit = remoteHits[0];
+                        closestHit.targetPeerId = id; // Store who we hit
+                        isEnemy = true;
+                        isRemote = true;
+                    }
+                }
             }
         }
 
@@ -948,17 +1060,55 @@ function updateBullets() {
                 const weaponType = b.userData.weaponType;
 
                 if (relativeY > 3.5) { // Headshot
-                    dmg = (weaponType === 'ak47') ? 100 : 70;
+                    dmg = (weaponType === 'ak47') ? 80 : 50; // Less damage
                     console.log("HEADSHOT!");
                 } else {
-                    dmg = (weaponType === 'ak47') ? 34 : 25;
+                    dmg = (weaponType === 'ak47') ? 22 : 15; // Less damage
                 }
 
                 enemy.userData.health -= dmg;
                 if (enemy.userData.health <= 0) {
-                    scene.remove(enemy);
-                    enemies.splice(enemies.indexOf(enemy), 1);
-                    if (enemies.length === 0) endRound(true);
+                    enemy.userData.isDead = true;
+
+                    // If it was a bot, remove from enemies array
+                    const botIdx = enemies.indexOf(enemy);
+                    if (botIdx > -1) {
+                        enemies.splice(botIdx, 1);
+                        setTimeout(() => scene.remove(enemy), 3000); // Wait for death animation
+
+                        // Check if all bots/enemies are dead (for single player or mixed)
+                        if (checkTeamWipe(1)) { // Team 1 is enemies
+                            endRound(true);
+                        }
+                    }
+
+                    // If it was a remote player, broadcast their death
+                    if (isRemote && networkReady) {
+                        const deathMsg = { type: 'player-dead', deadId: closestHit.targetPeerId };
+                        if (isHost) broadcast(deathMsg);
+                        else if (allConns[0]) allConns[0].send(deathMsg);
+
+                        // Check if all enemies are dead
+                        if (checkTeamWipe(playerTeams[closestHit.targetPeerId])) {
+                            const myTeam = myTeamId;
+                            const enemyTeam = playerTeams[closestHit.targetPeerId];
+                            if (myTeam !== enemyTeam) {
+                                endRound(true);
+                            }
+                        }
+
+                        setTimeout(() => scene.remove(enemy), 3000);
+                    }
+                }
+
+                if (isRemote && networkReady) {
+                    const data = { type: "hit", targetId: closestHit.targetPeerId, damage: dmg };
+                    if (isHost) {
+                        broadcast(data);
+                    } else if (allConns[0]) {
+                        allConns[0].send(data);
+                    }
+                    console.log(`Bullet hit player ${closestHit.targetPeerId} for ${dmg}`);
                 }
             }
             scene.remove(b);
@@ -1021,14 +1171,41 @@ function takeDamage(amount) {
 function endRound(playerWon) {
     if (!roundActive) return;
     roundActive = false;
-    if (playerWon) playerWins++; else enemyWins++;
 
-    scoreDisplay.textContent = `Score: ${playerWins} - ${enemyWins} (${playerWon ? "WON" : "LOST"} ROUND)`;
+    // Broadcast end to all if host
+    if (isHost && networkReady) {
+        broadcast({ type: 'round-ended', winnerTeam: playerWon ? myTeamId : (myTeamId === 0 ? 1 : 0) });
+    }
+
+    if (playerWon) {
+        playerWins++;
+    } else {
+        if (networkReady) opponentWins++;
+        else enemyWins++;
+    }
+
+    const currentScore = networkReady ? `${playerWins} - ${opponentWins}` : `${playerWins} - ${enemyWins}`;
+    scoreDisplay.textContent = `Score: ${currentScore} (${playerWon ? "WON" : "LOST"} ROUND)`;
+
+    // Show round overlays
+    if (playerWon) {
+        if (winScreen) winScreen.style.display = 'block';
+    } else {
+        if (deathScreen) deathScreen.style.display = 'block';
+    }
 
     if (playerWins >= MAX_WINS || enemyWins >= MAX_WINS) {
         setTimeout(() => endGame(playerWins >= MAX_WINS), 2000);
     } else {
-        setTimeout(startRound, 3000);
+        setTimeout(startRound, 3000); // Wait 3s as requested
+    }
+
+    // Multiplayer Sync: If we lost, tell others who won
+    if (!playerWon && networkReady) {
+        const winnerTeam = (myTeamId === 0) ? 1 : 0;
+        const msg = { type: 'round-ended', winnerTeam: winnerTeam };
+        if (isHost) broadcast(msg);
+        else if (allConns[0] && allConns[0].open) allConns[0].send(msg);
     }
 }
 
@@ -1084,6 +1261,12 @@ function animate() {
     const time = performance.now();
     const delta = (time - prevTime) / 1000;
 
+    // Networking: Send state to peer
+    if (networkReady && time - syncTimer > SYNC_RATE) {
+        sendUpdate();
+        syncTimer = time;
+    }
+
     if (controls.isLocked === true) {
 
         // --- Movement Logic ---
@@ -1091,12 +1274,31 @@ function animate() {
         velocity.z -= velocity.z * 10.0 * delta;
         velocity.y -= 9.8 * 100.0 * delta; // 100.0 = mass
 
-        direction.z = Number(moveForward) - Number(moveBackward);
-        direction.x = Number(moveRight) - Number(moveLeft);
-        direction.normalize(); // this ensures consistent movements in all directions
+        direction.z = (Number(moveForward) - Number(moveBackward));
+        direction.x = (Number(moveRight) - Number(moveLeft));
 
-        if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
-        if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
+        // Disable movement for losers/dead players during round end, but let winner move
+        // If round is NOT active, only the player who HAS health > 0 can move? 
+        // Actually, just check health. If dead, zero direction.
+        if (health <= 0 || isGameOver) {
+            direction.set(0, 0, 0);
+        }
+
+        direction.normalize();
+
+        if (moveForward || moveBackward) {
+            const accel = isCrouching ? 150.0 : 400.0;
+            velocity.z -= direction.z * accel * delta;
+        }
+        if (moveLeft || moveRight) {
+            const accel = isCrouching ? 150.0 : 400.0;
+            velocity.x -= direction.x * accel * delta;
+        }
+
+        if (moveLeft || moveRight) {
+            const accel = isCrouching ? 150.0 : 400.0;
+            velocity.x -= direction.x * accel * delta;
+        }
 
         const currentTargetHeight = isCrouching ? PLAYER_CROUCH_HEIGHT : PLAYER_STAND_HEIGHT;
         const lerpSpeed = 10 * delta;
@@ -1206,8 +1408,8 @@ function animate() {
             weapon.rotation.z = THREE.MathUtils.lerp(weapon.rotation.z, 0, 5 * delta);
         }
 
-        // Recoil Reset Logic: reset spray if 3 seconds idle
-        if (time - lastShotTime > 3000) {
+        // Recoil Reset Logic: reset spray if 1.5 seconds idle
+        if (time - lastShotTime > 1500) {
             recoilCounter = 0;
         }
 
@@ -1297,7 +1499,427 @@ function animate() {
         shoot();
     }
 
+    // Death Animations
+    for (const id in remotePlayers) {
+        const rp = remotePlayers[id];
+        if (rp.userData.isDead && rp.userData.deathRotate < Math.PI / 2) {
+            const step = 5 * delta;
+            rp.rotation.x += step;
+            rp.userData.deathRotate += step;
+            rp.position.y = Math.max(1, rp.position.y - 5 * delta);
+        }
+    }
+    enemies.forEach(e => {
+        if (e.userData.isDead && e.userData.deathRotate < Math.PI / 2) {
+            const step = 5 * delta;
+            e.rotation.x += step;
+            e.userData.deathRotate += step;
+            e.position.y = Math.max(1, e.position.y - 5 * delta);
+        }
+    });
+
     renderer.render(scene, camera);
 }
 init();
 animate();
+
+// --- Multiplayer Implementation ---
+
+function initMultiplayer() {
+    const lobbyStatus = document.getElementById('lobby-status');
+    const lobby = document.getElementById('lobby');
+    const myIdDisplay = document.getElementById('my-peer-id');
+    const roomDisplay = document.getElementById('room-name-display');
+    const bulb = document.getElementById('connection-bulb');
+
+    // Use hash as room name, or default
+    const roomName = window.location.hash.substring(1) || 'lobby';
+    if (roomName === 'lobby') return; // Don't auto-connect if no room specified
+
+    lobby.style.display = 'block';
+    lobbyStatus.textContent = "Initializing Network...";
+    roomDisplay.textContent = roomName;
+
+    // Google STUN servers for NAT traversal
+    const config = {
+        'iceServers': [
+            { 'urls': 'stun:stun.l.google.com:19302' },
+            { 'urls': 'stun:stun1.l.google.com:19302' },
+            { 'urls': 'stun:stun2.l.google.com:19302' },
+        ],
+        'debug': 3
+    };
+
+    // Attempt to be the host of the room
+    peer = new Peer(roomName, config);
+
+    peer.on('open', (id) => {
+        myId = id;
+        myIdDisplay.textContent = id;
+        myTeamId = 0; // Host is Team 1
+        console.log('Acting as Host in room: ' + id);
+        lobbyStatus.textContent = "Waiting for players...";
+        bulb.style.backgroundColor = '#ffff00'; // Yellow: Hosting
+        isHost = true;
+        updatePlayerCountUI();
+    });
+
+    peer.on('error', (err) => {
+        console.error('Peer error:', err);
+        if (err.type === 'unavailable-id') {
+            console.log('Room occupied, joining as client...');
+            if (peer) peer.destroy();
+
+            peer = new Peer(config);
+            peer.on('open', (id) => {
+                myId = id;
+                myIdDisplay.textContent = id;
+                const connection = peer.connect(roomName, { reliable: true });
+                allConns.push(connection);
+                setupConnection(connection);
+                isHost = false;
+                lobbyStatus.textContent = "Attempting to join " + roomName + "...";
+                bulb.style.backgroundColor = '#00ccff'; // Blue: Joining
+            });
+        } else {
+            lobbyStatus.textContent = "Error: " + err.type;
+            bulb.style.backgroundColor = '#ff0000'; // Red: Error
+        }
+    });
+
+    peer.on('connection', (connection) => {
+        if (allConns.length >= 3) {
+            console.log('Room full, ignoring connection.');
+            connection.close();
+            return;
+        }
+        allConns.push(connection);
+        setupConnection(connection);
+        updatePlayerCountUI();
+        console.log('A player joined!');
+        lobbyStatus.textContent = "Players joined! Starting game...";
+    });
+
+    peer.on('disconnected', () => {
+        console.log('Peer disconnected from server.');
+        peer.reconnect();
+    });
+}
+
+function updatePlayerCountUI() {
+    const pCountDisplay = document.getElementById('player-count');
+    if (pCountDisplay) {
+        pCountDisplay.textContent = (allConns.length + 1) + "/4";
+    }
+}
+
+function setupConnection(connection) {
+    const lobbyStatus = document.getElementById('lobby-status');
+    const lobby = document.getElementById('lobby');
+    const bulb = document.getElementById('connection-bulb');
+
+    connection.on('open', () => {
+        networkReady = true;
+        lobbyStatus.textContent = "CONNECTED!";
+        bulb.style.backgroundColor = '#00ff00';
+        bulb.style.boxShadow = '0 0 15px #00ff00';
+
+        // Team assignment logic (Host assigns teams)
+        if (isHost) {
+            const idx = allConns.indexOf(connection);
+            const team = (idx % 2 === 0) ? 1 : 0;
+            playerTeams[connection.peer] = team;
+
+            broadcast({
+                type: 'init-team',
+                assignments: playerTeams,
+                hostTeam: myTeamId
+            });
+        }
+
+        // Remove bots for multiplayer mode
+        for (const e of enemies) scene.remove(e);
+        enemies.length = 0;
+
+        setTimeout(() => {
+            if (lobby.style.display !== 'none') {
+                lobby.style.display = 'none';
+                roundActive = true;
+                startRound();
+            }
+        }, 2000);
+    });
+
+    connection.on('data', (data) => {
+        if (data.type === 'heartbeat') return;
+
+        // Handle local update
+        handleServerData(data, connection.peer);
+
+        // Host relays data to other clients
+        if (isHost) {
+            allConns.forEach(c => {
+                if (c.peer !== connection.peer && c.open) {
+                    c.send(data);
+                }
+            });
+        }
+    });
+
+    connection.on('close', () => {
+        const idx = allConns.indexOf(connection);
+        if (idx > -1) allConns.splice(idx, 1);
+
+        const peerId = connection.peer;
+        console.log(`Player ${peerId} left.`);
+
+        if (remotePlayers[peerId]) {
+            scene.remove(remotePlayers[peerId]);
+            delete remotePlayers[peerId];
+        }
+        delete playerTeams[peerId];
+
+        updatePlayerCountUI();
+        networkReady = allConns.length > 0;
+
+        // Host: Notify others
+        if (isHost) {
+            broadcast({ type: 'player-left', leftId: peerId });
+        }
+    });
+}
+
+function broadcast(data) {
+    allConns.forEach(c => {
+        if (c.open) c.send(data);
+    });
+}
+
+function handleServerData(data, senderPeerId) {
+    if (data.type === 'init-team') {
+        playerTeams = data.assignments;
+        myTeamId = isHost ? 0 : (playerTeams[myId] !== undefined ? playerTeams[myId] : 1);
+    } else if (data.type === 'move') {
+        const rp = remotePlayers[senderPeerId];
+        if (!rp) {
+            createRemotePlayer(senderPeerId);
+            return; // Skip this move update while creating
+        }
+        if (rp) {
+            rp.position.set(data.pos.x, data.pos.y, data.pos.z);
+            rp.rotation.y = data.rotY;
+        }
+    } else if (data.type === 'shoot') {
+        createOpponentBullet(data.pos, data.dir, senderPeerId);
+    } else if (data.type === 'hit') {
+        if (data.targetId === myId) {
+            takeDamage(data.damage);
+        }
+    } else if (data.type === 'round-ended') {
+        // If our team won according to the message, and we haven't ended yet
+        if (data.winnerTeam === myTeamId && roundActive) {
+            endRound(true);
+        } else if (data.winnerTeam !== myTeamId && roundActive) {
+            endRound(false);
+        }
+    } else if (data.type === 'player-dead') {
+        const rp = remotePlayers[data.deadId];
+        if (rp) {
+            rp.userData.isDead = true;
+            setTimeout(() => scene.remove(rp), 3000);
+
+            // Re-check wipe on death message
+            if (checkTeamWipe(playerTeams[data.deadId])) {
+                if (playerTeams[data.deadId] !== myTeamId) {
+                    endRound(true);
+                } else {
+                    // Our team might be wiped, check if we (local) are dead
+                    if (health <= 0) endRound(false);
+                }
+            }
+        }
+    }
+}
+
+function checkTeamWipe(teamId) {
+    // Check local player first
+    if (myTeamId === teamId && health > 0) return false;
+
+    // Check remote players
+    for (const id in remotePlayers) {
+        if (playerTeams[id] === teamId && !remotePlayers[id].userData.isDead) {
+            return false;
+        }
+    }
+
+    // Check bots
+    for (const enemy of enemies) {
+        // Bots are always team 1 (enemies) for now
+        if (teamId === 1 && !enemy.userData.isDead) return false;
+    }
+
+    return true;
+}
+
+function create3DCharacterModel(color = 0x3366ff) {
+    const group = new THREE.Group();
+    const isCT = (color === 0x3366ff); // Simple heuristic for now
+
+    // Standard Scale (Smaller than before - roughly 12 units total)
+    const s = 0.8;
+
+    // Materials
+    const bodyMat = new THREE.MeshStandardMaterial({ color: isCT ? 0x2e3a4e : 0x5c5c5c }); // Navy for CT, Grey for T
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xffdbac });
+    const clothingMat = new THREE.MeshStandardMaterial({ color: isCT ? 0x1c2533 : 0x3d3d3d });
+    const gearMat = new THREE.MeshStandardMaterial({ color: 0x111111 }); // Dark gear
+
+    // Torso (Vaguely rounded body)
+    const torsoGeo = new THREE.CylinderGeometry(1.8 * s, 1.5 * s, 6 * s, 8);
+    const torso = new THREE.Mesh(torsoGeo, bodyMat);
+    torso.position.y = 1.0 * s;
+    group.add(torso);
+
+    // Tactical Vest (Rounded gear)
+    const vestGeo = new THREE.CylinderGeometry(2.0 * s, 1.8 * s, 4.5 * s, 8);
+    const vest = new THREE.Mesh(vestGeo, gearMat);
+    vest.position.y = 1.0 * s;
+    group.add(vest);
+
+    // Head (Slightly rounded)
+    const headGeo = new THREE.CylinderGeometry(1.2 * s, 1.2 * s, 2.2 * s, 8);
+    const head = new THREE.Mesh(headGeo, skinMat);
+    head.position.y = 5.2 * s;
+    group.add(head);
+
+    // Helmet / Mask
+    const helmetGeo = new THREE.CylinderGeometry(1.4 * s, 1.2 * s, 1.4 * s, 8);
+    const helmet = new THREE.Mesh(helmetGeo, gearMat);
+    helmet.position.y = 5.8 * s;
+    group.add(helmet);
+
+    if (isCT) {
+        // SAS Visor
+        const visorGeo = new THREE.CylinderGeometry(0.9 * s, 0.9 * s, 0.5 * s, 8);
+        visorGeo.rotateX(Math.PI / 2);
+        const visor = new THREE.Mesh(visorGeo, new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 0.5 }));
+        visor.position.set(0, 5.2 * s, -1.0 * s);
+        group.add(visor);
+    } else {
+        head.material = new THREE.MeshStandardMaterial({ color: 0x222222 });
+    }
+
+    // Arms (Cylindrical)
+    const armGeo = new THREE.CylinderGeometry(0.5 * s, 0.5 * s, 6.0 * s, 8);
+    const leftArm = new THREE.Mesh(armGeo, bodyMat);
+    leftArm.position.set(-2.2 * s, 1.2 * s, 0);
+    group.add(leftArm);
+
+    const rightArm = new THREE.Mesh(armGeo, bodyMat);
+    rightArm.position.set(2.2 * s, 1.2 * s, 0);
+    group.add(rightArm);
+
+    // Legs (Cylindrical)
+    const legGeo = new THREE.CylinderGeometry(0.7 * s, 0.6 * s, 5.5 * s, 8);
+    const leftLeg = new THREE.Mesh(legGeo, clothingMat);
+    leftLeg.position.set(-1.0 * s, -4.0 * s, 0);
+    group.add(leftLeg);
+
+    const rightLeg = new THREE.Mesh(legGeo, clothingMat);
+    rightLeg.position.set(1.0 * s, -4.0 * s, 0);
+    group.add(rightLeg);
+
+    // Boots (Slightly rounded)
+    const bootGeo = new THREE.CylinderGeometry(0.9 * s, 0.9 * s, 0.8 * s, 8);
+    const leftBoot = new THREE.Mesh(bootGeo, gearMat);
+    leftBoot.position.set(-1.0 * s, -6.5 * s, 0.2 * s);
+    group.add(leftBoot);
+
+    const rightBoot = new THREE.Mesh(bootGeo, gearMat);
+    rightBoot.position.set(1.0 * s, -6.5 * s, 0.2 * s);
+    group.add(rightBoot);
+
+    group.traverse(child => {
+        if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+        }
+    });
+
+    group.userData.isDead = false;
+    group.userData.deathRotate = 0;
+
+    return group;
+}
+
+function createRemotePlayer(id) {
+    if (remotePlayers[id]) return;
+
+    // Team-based colors
+    const team = playerTeams[id];
+    const color = (team === myTeamId) ? 0x3366ff : 0xff3333; // Blue for teammates, Red for enemies
+
+    const mesh = create3DCharacterModel(color);
+    mesh.position.set(0, 7.5, -50);
+    mesh.userData.health = 100; // Initialize health for local hit tracking
+    scene.add(mesh);
+    remotePlayers[id] = mesh;
+
+    // Add "coleguț" tag if on same team
+    setTimeout(() => {
+        const team = playerTeams[id];
+        if (team === myTeamId) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#00ff00';
+            ctx.font = 'Bold 40px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('coleguț', 128, 45);
+
+            const txtTexture = new THREE.CanvasTexture(canvas);
+            const spriteMat = new THREE.SpriteMaterial({ map: txtTexture });
+            const sprite = new THREE.Sprite(spriteMat);
+            sprite.scale.set(10, 2.5, 1);
+            sprite.position.y = 10;
+            mesh.add(sprite);
+        }
+    }, 1000);
+}
+
+function sendUpdate() {
+    if (!networkReady || allConns.length === 0) return;
+
+    const data = {
+        type: 'move',
+        pos: {
+            x: controls.getObject().position.x,
+            y: controls.getObject().position.y,
+            z: controls.getObject().position.z
+        },
+        rotY: controls.getObject().rotation.y
+    };
+
+    if (isHost) {
+        broadcast(data);
+    } else if (allConns[0] && allConns[0].open) {
+        allConns[0].send(data);
+    }
+}
+
+function createOpponentBullet(pos, dir, senderPeerId) {
+    const bulletGeo = new THREE.SphereGeometry(2.5, 8, 8);
+    const bulletMat = new THREE.MeshStandardMaterial({
+        color: 0xff3300,
+        emissive: 0xff3300,
+        emissiveIntensity: 2.0
+    });
+    const bullet = new THREE.Mesh(bulletGeo, bulletMat);
+    bullet.position.copy(pos);
+
+    const velocity = new THREE.Vector3(dir.x, dir.y, dir.z).multiplyScalar(15.0);
+    bullet.userData.velocity = velocity;
+    scene.add(bullet);
+    enemyBullets.push(bullet);
+}

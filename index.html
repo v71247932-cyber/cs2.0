@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,8 +14,9 @@
             }
         }
     </script>
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
+
 <body>
     <div id="instructions">
         <h1>Click to Play</h1>
@@ -23,12 +25,24 @@
         <p>CLICK to Shoot</p>
     </div>
 
-    <div id="lobby" style="display: none;">
+    <div id="lobby"
+        style="display: none; background: rgba(0,0,0,0.8); padding: 20px; border-radius: 10px; border: 2px solid #555;">
         <h1>Multiplayer 1v1</h1>
-        <p id="lobby-status">Connecting to server...</p>
-        <div id="connection-indicator" style="margin-top: 20px;">
-            <div style="width: 20px; height: 20px; background: yellow; border-radius: 50%; margin: 0 auto;"></div>
+        <p id="lobby-status" style="font-size: 20px; color: #ffcc00;">Initializing Network...</p>
+        <div
+            style="margin: 10px 0; font-family: monospace; font-size: 14px; text-align: left; background: #222; padding: 10px; border-radius: 5px;">
+            <div>My ID: <span id="my-peer-id" style="color: #00ff00;">...</span></div>
+            <div>Room: <span id="room-name-display" style="color: #00ccff;">...</span></div>
+            <div>Players: <span id="player-count" style="color: #ff00ff;">1/4</span></div>
         </div>
+        <div id="connection-indicator" style="margin-top: 20px;">
+            <div id="connection-bulb"
+                style="width: 20px; height: 20px; background: #444; border-radius: 50%; margin: 0 auto; box-shadow: 0 0 10px #000;">
+            </div>
+        </div>
+        <button onclick="location.reload()"
+            style="margin-top: 20px; padding: 10px 20px; background: #444; color: white; border: none; border-radius: 5px; cursor: pointer;">Reset
+            Connection</button>
     </div>
 
     <div id="hud">
@@ -45,6 +59,27 @@
         <button onclick="location.reload()">Try Again</button>
     </div>
 
+    <div id="win-screen"
+        style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1000; pointer-events: none;">
+        <div
+            style="background: rgba(0, 255, 0, 0.1); border: 5px solid #00ff00; border-radius: 25px; padding: 40px 80px; box-shadow: 0 0 50px rgba(0, 255, 0, 0.3); backdrop-filter: blur(5px);">
+            <h1
+                style="color: #00ff00; font-size: 80px; margin: 0; text-shadow: 0 0 20px #00ff00; font-family: 'Outfit', sans-serif;">
+                YOU WIN</h1>
+        </div>
+    </div>
+
+    <div id="death-screen"
+        style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1000; pointer-events: none;">
+        <div
+            style="background: rgba(255, 0, 0, 0.1); border: 5px solid #ff0000; border-radius: 25px; padding: 40px 80px; box-shadow: 0 0 50px rgba(255, 0, 0, 0.3); backdrop-filter: blur(5px);">
+            <h1
+                style="color: #ff0000; font-size: 80px; margin: 0; text-shadow: 0 0 20px #ff0000; font-family: 'Outfit', sans-serif;">
+                WASTED</h1>
+        </div>
+    </div>
+
     <script type="module" src="game.js"></script>
 </body>
+
 </html>
