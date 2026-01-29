@@ -25,37 +25,74 @@
         <p>CLICK to Shoot</p>
     </div>
 
-    <div id="lobby"
-        style="display: none; background: rgba(0,0,0,0.8); padding: 20px; border-radius: 10px; border: 2px solid #555;">
-        <h1>Multiplayer 1v1</h1>
-        <p id="lobby-status" style="font-size: 20px; color: #ffcc00;">Initializing Network...</p>
-        <div
-            style="margin: 10px 0; font-family: monospace; font-size: 14px; text-align: left; background: #222; padding: 10px; border-radius: 5px;">
-            <div>My ID: <span id="my-peer-id" style="color: #00ff00;">...</span></div>
-            <div>Room: <span id="room-name-display" style="color: #00ccff;">...</span></div>
-            <div>Players: <span id="player-count" style="color: #ff00ff;">1/4</span></div>
+    <div id="lobby-ui">
+        <nav class="top-nav">
+            <div class="nav-links">
+                <button class="nav-item active" id="nav-home">HOME</button>
+                <button class="nav-item" id="nav-play">PLAY</button>
+                <button class="nav-item" id="nav-collection">COLLECTION</button>
+                <button class="nav-item" id="nav-shop">SHOP</button>
+            </div>
+            <div class="user-info">
+                <span id="player-name">RECRUIT_V1</span>
+                <div class="user-avatar"></div>
+            </div>
+        </nav>
+
+        <div id="character-preview-container">
+            <img src="character_lobby.png" alt="Character Preview" id="character-preview">
         </div>
-        <div id="connection-indicator" style="margin-top: 20px;">
-            <div id="connection-bulb"
-                style="width: 20px; height: 20px; background: #444; border-radius: 50%; margin: 0 auto; box-shadow: 0 0 10px #000;">
+
+        <div id="mode-selection-modal" class="modal">
+            <div class="modal-content">
+                <h2>SELECT GAME MODE</h2>
+                <div class="modes-grid">
+                    <button class="mode-card" data-mode="1v1">
+                        <span class="mode-title">1v1</span>
+                        <span class="mode-desc">Duel</span>
+                    </button>
+                    <button class="mode-card" data-mode="2v2">
+                        <span class="mode-title">2v2</span>
+                        <span class="mode-desc">Wingman</span>
+                    </button>
+                    <button class="mode-card" data-mode="3v3">
+                        <span class="mode-title">3v3</span>
+                        <span class="mode-desc">Team Deathmatch</span>
+                    </button>
+                    <button class="mode-card" data-mode="1vBot">
+                        <span class="mode-title">1vBOT</span>
+                        <span class="mode-desc">Training</span>
+                    </button>
+                </div>
+                <button id="close-modes" class="close-btn">BACK</button>
             </div>
         </div>
-        <button onclick="location.reload()"
-            style="margin-top: 20px; padding: 10px 20px; background: #444; color: white; border: none; border-radius: 5px; cursor: pointer;">Reset
-            Connection</button>
+        <div id="matchmaking-modal" class="modal">
+            <div class="modal-content matchmaking-content">
+                <div class="loader"></div>
+                <h2>SEARCHING FOR MATCH</h2>
+                <div class="matchmaking-details">
+                    <p>MODE: <span id="current-mode-display">1v1</span></p>
+                    <p>STATUS: <span id="matchmaking-status">Connecting...</span></p>
+                    <p id="players-found-container">PLAYERS FOUND: <span id="found-count">1</span>/<span
+                            id="required-count">2</span></p>
+                </div>
+                <button id="cancel-matchmaking" class="close-btn">CANCEL</button>
+            </div>
+        </div>
     </div>
 
     <div id="hud">
         <div id="crosshair">+</div>
         <div id="stats">
             <div id="health">Health: 100</div>
-            <div id="score">Score: 0</div>
+            <div id="score">Scoru: 0</div>
         </div>
     </div>
 
     <div id="game-over">
         <h1>GAME OVER</h1>
-        <p id="final-score">Score: 0</p>
+        <p id="final-score">Scoru: 0</p>
         <button onclick="location.reload()">Try Again</button>
     </div>
 

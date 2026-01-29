@@ -87,6 +87,27 @@ const scoreDisplay = document.getElementById('score');
 const winScreen = document.getElementById('win-screen');
 const deathScreen = document.getElementById('death-screen');
 const finalScoreDisplay = document.getElementById('final-score');
+
+// Lobby Elements
+const lobbyUI = document.getElementById('lobby-ui');
+const navPlay = document.getElementById('nav-play');
+const modeModal = document.getElementById('mode-selection-modal');
+const closeModes = document.getElementById('close-modes');
+const modeButtons = document.querySelectorAll('.mode-card');
+
+// Matchmaking Elements
+const matchmakingModal = document.getElementById('matchmaking-modal');
+const matchmakingStatus = document.getElementById('matchmaking-status');
+const foundCountDisplay = document.getElementById('found-count');
+const requiredCountDisplay = document.getElementById('required-count');
+const modeDisplay = document.getElementById('current-mode-display');
+const cancelMatchmakingBtn = document.getElementById('cancel-matchmaking');
+
+let requiredPlayers = 1;
+let currentPlayers = 1;
+let currentMode = '1vBot';
+
+
 const ammoDisplay = document.createElement('div');
 ammoDisplay.id = 'ammo';
 ammoDisplay.style.position = 'absolute';
@@ -124,30 +145,49 @@ function init() {
     switchWeapon('ak47'); // Start with AK-47 as requested
 
     // --- Networking Init ---
-    initMultiplayer();
+    // initMultiplayer(); // Called when mode is selected
 
 
 
 
 
 
-    // Add instruction listeners
 
-    // Add instruction listeners
-    instructionScreen.addEventListener('click', function () {
-        controls.lock();
-    });
+    // --- UI & Controls Listeners ---
+    instructionScreen.addEventListener('click', () => controls.lock());
 
-    controls.addEventListener('lock', function () {
+    controls.addEventListener('lock', () => {
+        lobbyUI.style.display = 'none';
+        matchmakingModal.classList.remove('active');
         instructionScreen.style.display = 'none';
         hud.style.display = 'block';
     });
 
-    controls.addEventListener('unlock', function () {
+    controls.addEventListener('unlock', () => {
         if (!isGameOver) {
-            instructionScreen.style.display = 'flex';
+            if (roundActive) {
+                instructionScreen.style.display = 'flex';
+            } else {
+                lobbyUI.style.display = 'flex';
+            }
             hud.style.display = 'none';
         }
+    });
+
+    navPlay.addEventListener('click', () => modeModal.classList.add('active'));
+    closeModes.addEventListener('click', () => modeModal.classList.remove('active'));
+
+    modeButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.mode;
+            startMatchmaking(mode);
+        });
+    });
+
+    cancelMatchmakingBtn.addEventListener('click', () => {
+        if (peer) peer.destroy();
+        matchmakingModal.classList.remove('active');
+        modeModal.classList.add('active');
     });
 
     scene.add(controls.getObject());
@@ -257,7 +297,7 @@ function init() {
     raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0), 0, 10);
 
     // Floor (Sandstone)
-    let floorGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
+    let floorGeometry = new THREE.PlaneGeometry(4000, 4000, 100, 100);
     floorGeometry.rotateX(-Math.PI / 2);
 
     let floorMaterial = new THREE.MeshStandardMaterial({
@@ -279,7 +319,7 @@ function init() {
     window.addEventListener('resize', onWindowResize);
 
     // Start Logic
-    startRound();
+    // startRound(); // Only called after a game mode is selected
 }
 
 function onWindowResize() {
@@ -549,62 +589,75 @@ function createMirageMap() {
         scene.add(mesh);
         if (collidable) {
             objects.push(mesh);
-            // Compute and store bounding box
             const box = new THREE.Box3().setFromObject(mesh);
             objectBoxes.push(box);
         }
         return mesh;
     }
 
-    // --- 1. Palace / Scaffolding Area (Left side of image) ---
-    // The wooden platform
-    addBox(60, 0, 10, 30, 12, 40, woodOld);
-    // The "Roof" / Palace Entrance overhang
-    addBox(60, 25, 10, 30, 2, 40, sandstoneMain);
-    // Pillars holding the overhang
-    addBox(50, 12, 25, 2, 13, 2, sandstoneDark);
-    addBox(50, 12, -5, 2, 13, 2, sandstoneDark);
+    const scale = 4.0; // Increased scale for full map layout
 
-    // Dark Entrance to Palace
-    addBox(70, 12, 10, 5, 10, 10, darkSpace);
+    // Helper: Material aliases for cleaner map code
+    const walls = sandstoneMain;
+    const trim = sandstoneDark;
+    const crates = woodNew;
+    const oldWood = woodOld;
 
-    // --- 2. A-Ramp Walls (Where we are standing) ---
-    // Left Wall (near Palace)
-    addBox(40, 0, 40, 5, 20, 40, sandstoneMain);
-    // Right Wall (Tetris side)
-    addBox(-30, 0, 40, 5, 15, 40, sandstoneMain);
+    // --- 1. T-SPAWN AREA (Z+ direction) ---
+    addBox(0, 0, 450, 100, 40, 50, walls); // Back wall
+    addBox(-60, 0, 400, 20, 40, 150, walls); // Left wall
+    addBox(60, 0, 400, 20, 40, 150, walls); // Right wall
 
-    // --- 3. Tetris (The boxes in front of Ramp) ---
-    // Concrete-ish base or crate stack
-    addBox(-20, 0, 10, 12, 10, 12, sandstoneDark);
-    addBox(-20, 0, 22, 12, 6, 8, sandstoneDark);
+    // --- 2. T-RAMP & A-ENTRANCE ---
+    addBox(50 * scale, 0, 20 * scale, 15 * scale, 25 * scale, 40 * scale, walls); // Ramp Left Wall
+    addBox(85 * scale, 0, 20 * scale, 15 * scale, 30 * scale, 40 * scale, walls); // Ramp Right Wall
+    addBox(70 * scale, 25 * scale, 20 * scale, 30 * scale, 5 * scale, 40 * scale, walls); // Roof over Ramp
 
-    // --- 4. A-Site Structure (Triple / Firebox area) ---
-    // Triple Box stack (Central view)
-    addBox(0, 0, -30, 12, 12, 12, woodNew);
-    addBox(12, 0, -35, 12, 8, 12, woodNew);
+    // --- 3. A-SITE landmark structures ---
+    addBox(20 * scale, 0, -30 * scale, 12 * scale, 12 * scale, 12 * scale, crates); // Triple box
+    addBox(24 * scale, 12 * scale, -30 * scale, 6 * scale, 6 * scale, 6 * scale, crates); // Top of Triple
+    addBox(40 * scale, 0, -40 * scale, 10 * scale, 12 * scale, 10 * scale, crates); // Firebox
+    addBox(30 * scale, 0, 0, 15 * scale, 20 * scale, 30 * scale, walls); // Sandwich wall
 
-    // --- 5. Stairs (Background) ---
-    // The stairs leading to Connector/Jungle
-    for (let i = 0; i < 8; i++) {
-        addBox(-40 - (i * 3), 0 + (i * 1.5), -20, 8, 2 + (i * 3), 20, sandstoneMain);
+    // --- 4. PALACE ---
+    addBox(80 * scale, 0, -10 * scale, 25 * scale, 40 * scale, 40 * scale, walls); // Palace Main room
+    addBox(70 * scale, 15 * scale, -25 * scale, 30 * scale, 2 * scale, 20 * scale, oldWood); // Balcony
+    addBox(60 * scale, 0, -25 * scale, 2 * scale, 15 * scale, 2 * scale, trim); // Pillar 1
+    addBox(60 * scale, 0, -15 * scale, 2 * scale, 15 * scale, 2 * scale, trim); // Pillar 2
+
+    // --- 5. JUNGLE / CONNECTOR / STAIRS ---
+    addBox(-15 * scale, 0, -35 * scale, 25 * scale, 35 * scale, 40 * scale, walls); // Connector/Jungle mass
+    addBox(-10 * scale, 20 * scale, -15 * scale, 15 * scale, 2 * scale, 10 * scale, walls); // Window frame
+    for (let i = 0; i < 10; i++) {
+        addBox(-5 * scale, 0 + (i * 2), -25 * scale + (i * 3), 15 * scale, 3 * scale, 3 * scale, trim); // Stairs
     }
-    // Jungle / Connector platform
-    addBox(-70, 0, -20, 30, 18, 25, sandstoneMain);
-    // Arches / Window visual details
-    addBox(-70, 18, -20, 30, 15, 25, sandstoneMain); // Upper wall
 
-    // --- 6. Sandwich / Stairs Wall (Far back right) ---
-    addBox(-40, 0, -50, 10, 25, 60, sandstoneMain);
+    // --- 6. MID AREA ---
+    addBox(0, 0, 0, 20 * scale, 2 * scale, 100 * scale, floorTile, 0, false); // Mid Lane
+    addBox(-30 * scale, 0, 0, 5 * scale, 40 * scale, 80 * scale, walls); // Mid Left wall (Catwalk)
+    addBox(30 * scale, 0, 0, 5 * scale, 40 * scale, 80 * scale, walls); // Mid Right wall
+    addBox(-35 * scale, 15 * scale, 0, 10 * scale, 2 * scale, 40 * scale, walls); // Catwalk path
 
-    // --- 7. CT/Ticket Booth (Far Left Background) ---
-    addBox(40, 0, -60, 10, 15, 10, sandstoneMain); // Ticket booth
+    // --- 7. B-SITE AREA (Z- direction) ---
+    addBox(-100 * scale, 0, -40 * scale, 40 * scale, 10 * scale, 40 * scale, trim); // B-Default platform
+    addBox(-105 * scale, 0, -25 * scale, 15 * scale, 12 * scale, 15 * scale, crates); // Van area
+    addBox(-80 * scale, 0, -60 * scale, 10 * scale, 12 * scale, 25 * scale, trim); // Bench
+    addBox(-120 * scale, 0, -20 * scale, 30 * scale, 50 * scale, 60 * scale, walls); // Market building
 
-    // --- 8. Background Walls (Tall buildings) ---
-    // Making the world feel enclosed like the city
-    addBox(0, 0, -100, 200, 60, 10, sandstoneMain); // Far back wall
-    addBox(100, 0, 0, 10, 60, 200, sandstoneMain); // Right wall
-    addBox(-100, 0, 0, 10, 60, 200, sandstoneMain); // Left wall
+    // --- 8. APARTMENTS ---
+    addBox(-80 * scale, 20 * scale, 50 * scale, 25 * scale, 30 * scale, 100 * scale, walls); // Apps building
+    addBox(-75 * scale, 35 * scale, 80 * scale, 15 * scale, 5 * scale, 15 * scale, oldWood); // Apps window
+
+    // --- 9. CT-SPAWN & TICKET ---
+    addBox(0, 0, -450, 100, 40, 50, walls); // CT Back wall
+    addBox(20 * scale, 0, -60 * scale, 15 * scale, 15 * scale, 15 * scale, walls); // Ticket booth
+    addBox(15 * scale, 15 * scale, -60 * scale, 25 * scale, 2 * scale, 20 * scale, trim); // Ticket Roof
+
+    // --- 10. Surroundings (Boundary) ---
+    addBox(0, 0, 600, 1200, 150, 20, walls); // Far T wall
+    addBox(0, 0, -600, 1200, 150, 20, walls); // Far CT wall
+    addBox(600, 0, 0, 20, 150, 1200, walls); // Far Right
+    addBox(-600, 0, 0, 20, 150, 1200, walls); // Far Left
 
     // Floor override (since we passed in materials)
     // We already have a floor in init(), but let's place some "paving" stones for detail
@@ -664,21 +717,19 @@ function shoot() {
     let upwardRecoil = 0;
 
     if (currentWeaponType === 'ak47') {
-        // JUMP INACCURACY
         let effectiveRecoilCounter = recoilCounter;
         if (!canJump) {
-            effectiveRecoilCounter = 15;
+            effectiveRecoilCounter = 10;
         }
 
-        // NO DELAY: Recoil starts from the second bullet (recoilCounter > 0)
         if (effectiveRecoilCounter > 0) {
-            // Significant "jump" for the second shot to move off head
-            const recoilJump = (effectiveRecoilCounter === 1) ? 0.15 : 0.05;
-            upwardRecoil = effectiveRecoilCounter * (isCrouching ? 0.03 : recoilJump);
-            spreadAmount = (isCrouching ? 0.03 : 0.05) + (effectiveRecoilCounter * 0.02);
+            // Smaller vertical jump and spread
+            const recoilJump = (effectiveRecoilCounter === 1) ? 0.08 : 0.02;
+            upwardRecoil = effectiveRecoilCounter * (isCrouching ? 0.015 : recoilJump);
+            spreadAmount = (isCrouching ? 0.015 : 0.025) + (effectiveRecoilCounter * 0.01);
         } else {
             upwardRecoil = 0;
-            // First shot remains precise
+            spreadAmount = 0.005; // First shot is very precise
         }
         recoilCounter++;
     } else {
@@ -830,15 +881,11 @@ function startRound() {
     recoilCounter = 0;
 
     // Reset Ammo for all weapons
-    for (const type in ammoConfigs) {
-        ammoConfigs[type].mag = weaponConfigs[type] ? weaponConfigs[type].magSize : 30; // Accessing base config if possible, else fallback
-        // Since ammoConfigs is modified in place, we need to know the initial mag size. 
-        // Checking the config object.
-        if (type === 'ak47') ammoConfigs[type].mag = 30;
-        if (type === 'pistol') ammoConfigs[type].mag = 12;
-        // Reserve could also be reset if desired, though often reserve is kept. User asked to "reset bullets".
-        if (type === 'ak47') ammoConfigs[type].reserve = 90;
-        if (type === 'pistol') ammoConfigs[type].reserve = 36;
+    for (const type in weaponAmmo) {
+        if (weaponConfigs[type]) {
+            weaponAmmo[type].mag = weaponConfigs[type].magSize;
+            weaponAmmo[type].reserve = weaponConfigs[type].reserve;
+        }
     }
     updateAmmoDisplay();
 
@@ -860,15 +907,15 @@ function startRound() {
     if (networkReady) {
         // Player 1 (Host) and Player 2 positions
         if (isHost) {
-            controls.getObject().position.set(0, 10, 80);
-            controls.getObject().rotation.set(0, Math.PI, 0);
+            controls.getObject().position.set(20, 10, -420); // CT Spawn near back wall
+            controls.getObject().rotation.set(0, 0, 0); // Look towards Mid (-Z)
         } else {
-            controls.getObject().position.set(0, 10, -80);
-            controls.getObject().rotation.set(0, 0, 0);
+            controls.getObject().position.set(0, 10, 420); // T Spawn near back wall
+            controls.getObject().rotation.set(0, Math.PI, 0); // Look towards Mid (+Z)
         }
     } else {
-        controls.getObject().position.set(0, 10, 80);
-        controls.getObject().rotation.set(0, Math.PI, 0);
+        controls.getObject().position.set(20, 10, -420); // Start at CT Spawn for practice
+        controls.getObject().rotation.set(0, 0, 0);
         spawnEnemies(enemiesPerRound);
     }
 
@@ -1185,7 +1232,7 @@ function endRound(playerWon) {
     }
 
     const currentScore = networkReady ? `${playerWins} - ${opponentWins}` : `${playerWins} - ${enemyWins}`;
-    scoreDisplay.textContent = `Score: ${currentScore} (${playerWon ? "WON" : "LOST"} ROUND)`;
+    scoreDisplay.textContent = `Scoru: ${currentScore} (${playerWon ? "WON" : "LOST"} ROUND)`;
 
     // Show round overlays
     if (playerWon) {
@@ -1270,29 +1317,28 @@ function animate() {
     if (controls.isLocked === true) {
 
         // --- Movement Logic ---
-        velocity.x -= velocity.x * 10.0 * delta;
-        velocity.z -= velocity.z * 10.0 * delta;
-        velocity.y -= 9.8 * 100.0 * delta; // 100.0 = mass
-
-        direction.z = (Number(moveForward) - Number(moveBackward));
-        direction.x = (Number(moveRight) - Number(moveLeft));
-
-        // Disable movement for losers/dead players during round end, but let winner move
-        // If round is NOT active, only the player who HAS health > 0 can move? 
-        // Actually, just check health. If dead, zero direction.
+        // Disable movement and rotation for dead players
         if (health <= 0 || isGameOver) {
             direction.set(0, 0, 0);
-        }
+            if (controls.isLocked) controls.unlock();
+        } else {
+            // Only update movement if alive
+            velocity.x -= velocity.x * 10.0 * delta;
+            velocity.z -= velocity.z * 10.0 * delta;
+            velocity.y -= 9.8 * 100.0 * delta; // 100.0 = mass
 
-        direction.normalize();
+            direction.z = (Number(moveForward) - Number(moveBackward));
+            direction.x = (Number(moveRight) - Number(moveLeft));
+            direction.normalize();
 
-        if (moveForward || moveBackward) {
-            const accel = isCrouching ? 150.0 : 400.0;
-            velocity.z -= direction.z * accel * delta;
-        }
-        if (moveLeft || moveRight) {
-            const accel = isCrouching ? 150.0 : 400.0;
-            velocity.x -= direction.x * accel * delta;
+            if (moveForward || moveBackward) {
+                const accel = isCrouching ? 150.0 : 400.0;
+                velocity.z -= direction.z * accel * delta;
+            }
+            if (moveLeft || moveRight) {
+                const accel = isCrouching ? 150.0 : 400.0;
+                velocity.x -= direction.x * accel * delta;
+            }
         }
 
         if (moveLeft || moveRight) {
@@ -1525,20 +1571,41 @@ animate();
 
 // --- Multiplayer Implementation ---
 
-function initMultiplayer() {
-    const lobbyStatus = document.getElementById('lobby-status');
-    const lobby = document.getElementById('lobby');
-    const myIdDisplay = document.getElementById('my-peer-id');
-    const roomDisplay = document.getElementById('room-name-display');
-    const bulb = document.getElementById('connection-bulb');
+function startMatchmaking(mode) {
+    currentMode = mode;
+    modeDisplay.textContent = mode;
+    modeModal.classList.remove('active');
 
-    // Use hash as room name, or default
-    const roomName = window.location.hash.substring(1) || 'lobby';
-    if (roomName === 'lobby') return; // Don't auto-connect if no room specified
+    if (mode === '1vBot') {
+        lobbyUI.style.display = 'none';
+        networkReady = false;
+        controls.lock();
+        startRound();
+        return;
+    }
 
-    lobby.style.display = 'block';
-    lobbyStatus.textContent = "Initializing Network...";
-    roomDisplay.textContent = roomName;
+    const modeMap = {
+        '1v1': 2,
+        '2v2': 4,
+        '3v3': 6
+    };
+
+    requiredPlayers = modeMap[mode] || 2;
+    requiredCountDisplay.textContent = requiredPlayers;
+    foundCountDisplay.textContent = '1';
+    matchmakingStatus.textContent = 'Initializing...';
+    matchmakingModal.classList.add('active');
+
+    initMultiplayer(mode);
+}
+
+function initMultiplayer(mode) {
+    const roomName = `FPS_MATCH_ROOM_${mode.toUpperCase()}`;
+
+    // Clear existing connections if any
+    allConns.forEach(c => c.close());
+    allConns = [];
+    if (peer) peer.destroy();
 
     // Google STUN servers for NAT traversal
     const config = {
@@ -1547,21 +1614,21 @@ function initMultiplayer() {
             { 'urls': 'stun:stun1.l.google.com:19302' },
             { 'urls': 'stun:stun2.l.google.com:19302' },
         ],
-        'debug': 3
+        'debug': 1
     };
+
+    matchmakingStatus.textContent = 'Searching for room...';
 
     // Attempt to be the host of the room
     peer = new Peer(roomName, config);
 
     peer.on('open', (id) => {
         myId = id;
-        myIdDisplay.textContent = id;
         myTeamId = 0; // Host is Team 1
         console.log('Acting as Host in room: ' + id);
-        lobbyStatus.textContent = "Waiting for players...";
-        bulb.style.backgroundColor = '#ffff00'; // Yellow: Hosting
+        matchmakingStatus.textContent = "Waiting for players...";
         isHost = true;
-        updatePlayerCountUI();
+        updateMatchmakingUI();
     });
 
     peer.on('error', (err) => {
@@ -1573,31 +1640,27 @@ function initMultiplayer() {
             peer = new Peer(config);
             peer.on('open', (id) => {
                 myId = id;
-                myIdDisplay.textContent = id;
                 const connection = peer.connect(roomName, { reliable: true });
                 allConns.push(connection);
                 setupConnection(connection);
                 isHost = false;
-                lobbyStatus.textContent = "Attempting to join " + roomName + "...";
-                bulb.style.backgroundColor = '#00ccff'; // Blue: Joining
+                matchmakingStatus.textContent = "Joining match...";
             });
         } else {
-            lobbyStatus.textContent = "Error: " + err.type;
-            bulb.style.backgroundColor = '#ff0000'; // Red: Error
+            matchmakingStatus.textContent = "Error: " + err.type;
         }
     });
 
     peer.on('connection', (connection) => {
-        if (allConns.length >= 3) {
-            console.log('Room full, ignoring connection.');
+        if (allConns.length + 1 >= requiredPlayers) {
+            console.log('Match full, ignoring connection.');
             connection.close();
             return;
         }
         allConns.push(connection);
         setupConnection(connection);
-        updatePlayerCountUI();
-        console.log('A player joined!');
-        lobbyStatus.textContent = "Players joined! Starting game...";
+        updateMatchmakingUI();
+        console.log('A player joined the match!');
     });
 
     peer.on('disconnected', () => {
@@ -1605,6 +1668,29 @@ function initMultiplayer() {
         peer.reconnect();
     });
 }
+
+function updateMatchmakingUI() {
+    currentPlayers = allConns.length + 1;
+    foundCountDisplay.textContent = currentPlayers;
+
+    if (currentPlayers >= requiredPlayers) {
+        matchmakingStatus.textContent = "MATCH FOUND!";
+
+        // Hide lobby immediately as it covers the map
+        setTimeout(() => {
+            matchmakingModal.classList.remove('active');
+            lobbyUI.style.display = 'none';
+
+            // Show start prompt because auto-locking might fail
+            instructionScreen.style.display = 'flex';
+            instructionScreen.querySelector('h1').textContent = "MATCH READY";
+            instructionScreen.querySelector('p').textContent = "Click to Enter Map";
+
+            startRound();
+        }, 1500);
+    }
+}
+
 
 function updatePlayerCountUI() {
     const pCountDisplay = document.getElementById('player-count');
@@ -1620,9 +1706,7 @@ function setupConnection(connection) {
 
     connection.on('open', () => {
         networkReady = true;
-        lobbyStatus.textContent = "CONNECTED!";
-        bulb.style.backgroundColor = '#00ff00';
-        bulb.style.boxShadow = '0 0 15px #00ff00';
+        matchmakingStatus.textContent = "CONNECTED!";
 
         // Team assignment logic (Host assigns teams)
         if (isHost) {
@@ -1641,13 +1725,7 @@ function setupConnection(connection) {
         for (const e of enemies) scene.remove(e);
         enemies.length = 0;
 
-        setTimeout(() => {
-            if (lobby.style.display !== 'none') {
-                lobby.style.display = 'none';
-                roundActive = true;
-                startRound();
-            }
-        }, 2000);
+        updateMatchmakingUI();
     });
 
     connection.on('data', (data) => {
